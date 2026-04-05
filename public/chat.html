@@ -1,0 +1,1054 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Nexus Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme:{ extend:{
+        colors:{ ncyan:'#00e5ff', nviolet:'#9b5de5', nrose:'#f72585', ngreen:'#00e676', ndark:'#04040d' },
+        fontFamily:{ orbitron:['Orbitron','monospace'], dm:['DM Sans','sans-serif'] }
+      }}
+    };
+  </script>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:'DM Sans',sans-serif}
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(155,93,229,.35);border-radius:2px}
+
+    .blob{position:absolute;border-radius:50%;filter:blur(110px);animation:blob-d linear infinite;pointer-events:none}
+    @keyframes blob-d{0%{transform:translate(0,0) scale(1)}33%{transform:translate(28px,-18px) scale(1.06)}66%{transform:translate(-16px,32px) scale(.96)}100%{transform:translate(0,0) scale(1)}}
+    .grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.02;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:160px}
+
+    @keyframes msg-in{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+    .msg-in{animation:msg-in .25s cubic-bezier(.16,1,.3,1) both}
+
+    @keyframes tdot{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-5px);opacity:1}}
+    .tdot{animation:tdot 1.2s infinite}
+    .tdot:nth-child(2){animation-delay:.18s}
+    .tdot:nth-child(3){animation-delay:.36s}
+
+    @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.6);opacity:.6}}
+    .pulse{animation:pulse 2s infinite}
+
+    @keyframes ptt-rec{0%,100%{transform:scale(1)}50%{transform:scale(1.15);box-shadow:0 0 20px rgba(247,37,133,.6)}}
+    .ptt-rec{animation:ptt-rec .9s infinite}
+
+    .mention{color:#00e5ff;font-weight:600}
+
+    /* Lightbox */
+    .lightbox{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out;backdrop-filter:blur(8px)}
+    .lightbox-content{position:relative;max-width:92vw;max-height:92vh}
+    .lightbox img,.lightbox video{max-width:100%;max-height:90vh;border-radius:10px;object-fit:contain}
+
+    /* Edit input */
+    .edit-input{background:rgba(0,229,255,.07);border:1px solid rgba(0,229,255,.3);border-radius:8px;padding:6px 10px;width:100%;outline:none;color:#e8eaf6;font-family:'DM Sans',sans-serif;font-size:14px}
+
+    /* Context menu */
+    .ctx-menu{position:absolute;z-index:100;background:rgba(10,10,28,.95);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:6px;backdrop-filter:blur(20px);min-width:140px;box-shadow:0 16px 40px rgba(0,0,0,.5)}
+    .ctx-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:#c8cae6;transition:background .15s}
+    .ctx-item:hover{background:rgba(255,255,255,.07)}
+    .ctx-item.danger:hover{background:rgba(247,37,133,.12);color:#f72585}
+
+    /* Scroll-to-bottom */
+    @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+    .bob{animation:bob 1.6s infinite}
+
+    /* Video player */
+    video{border-radius:12px;max-width:280px;max-height:220px;width:100%}
+
+    /* Lipsync canvas */
+    .lipsync-canvas{border-radius:50%;display:block}
+
+    /* Speed selector */
+    .speed-btn{padding:2px 7px;border-radius:6px;font-size:10px;cursor:pointer;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.07);color:#c8cae6;transition:all .15s;font-family:'Orbitron',monospace}
+    .speed-btn.active{background:rgba(0,229,255,.18);border-color:rgba(0,229,255,.35);color:#00e5ff}
+    .speed-btn:hover{background:rgba(255,255,255,.12)}
+  </style>
+</head>
+<body class="bg-ndark text-gray-100 h-screen overflow-hidden">
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo, memo } = React;
+
+const socket = io({ reconnectionAttempts: 10 });
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+const esc   = s  => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fTime = ts => new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+const fDate = ts => {
+  const d=new Date(ts),now=new Date();
+  if(d.toDateString()===now.toDateString()) return 'Today';
+  const y=new Date(now); y.setDate(now.getDate()-1);
+  if(d.toDateString()===y.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString([],{month:'short',day:'numeric'});
+};
+const genId = () => Math.random().toString(36).slice(2)+Date.now();
+const fDur  = s  => s?`${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`:'0:00';
+
+function renderText(text) {
+  return String(text).split(/(@\w[\w-]*)/g).map((p,i) =>
+    /^@\w/.test(p) ? <span key={i} className="mention">{p}</span> : p
+  );
+}
+
+// ── Random avatar (dicebear styles) ──────────────────────────────────────────
+const DICEBEAR_STYLES = ['adventurer','avataaars','bottts','croodles','fun-emoji','micah','miniavs','open-peeps','pixel-art'];
+function randomAvatar(username) {
+  const style = DICEBEAR_STYLES[Math.abs(username.split('').reduce((a,c)=>a+c.charCodeAt(0),0)) % DICEBEAR_STYLES.length];
+  return `https://api.dicebear.com/7.x/${style}/svg?seed=${encodeURIComponent(username)}`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Avatar component
+// ══════════════════════════════════════════════════════════════════════════════
+function Avatar({ src, username, size=36, ring=false }) {
+  const [err, setErr] = useState(false);
+  const fb = randomAvatar(username||'user');
+  return (
+    <div className={`rounded-xl overflow-hidden flex-shrink-0 ${ring?'ring-2 ring-ncyan':''}`}
+         style={{width:size,height:size,background:'linear-gradient(135deg,#9b5de5,#00e5ff)'}}>
+      <img src={(!src||err)?fb:src} alt={username} className="w-full h-full object-cover" onError={()=>setErr(true)}/>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Lipsync animated avatar (Web Audio API)
+// ══════════════════════════════════════════════════════════════════════════════
+function LipsyncAvatar({ audioRef, username, src, size=40 }) {
+  const canvasRef = useRef(null);
+  const rafRef    = useRef(null);
+  const analyserRef = useRef(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    let ctx, analyser, source;
+
+    function setup() {
+      if (analyserRef.current) return;
+      ctx      = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source   = ctx.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      analyserRef.current = analyser;
+      draw();
+    }
+
+    function draw() {
+      if (!analyserRef.current || !canvasRef.current) return;
+      const canvas  = canvasRef.current;
+      const c       = canvas.getContext('2d');
+      const data    = new Uint8Array(analyserRef.current.frequencyBinCount);
+      analyserRef.current.getByteFrequencyData(data);
+      const vol     = data.slice(0,30).reduce((a,b)=>a+b,0)/30/255;
+
+      c.clearRect(0,0,size,size);
+
+      // Circle bg
+      c.beginPath(); c.arc(size/2,size/2,size/2,0,Math.PI*2);
+      c.fillStyle='rgba(0,229,255,0.15)'; c.fill();
+
+      // Mouth
+      const mouthW = 12 + vol*16;
+      const mouthH = 3  + vol*14;
+      c.beginPath();
+      c.ellipse(size/2, size*0.62, mouthW/2, mouthH/2+1, 0, 0, Math.PI*2);
+      c.fillStyle=`rgba(247,37,133,${0.5+vol*0.5})`; c.fill();
+
+      // Soundwave rings
+      if (vol > 0.05) {
+        c.beginPath(); c.arc(size/2,size/2,size/2+2+vol*6,0,Math.PI*2);
+        c.strokeStyle=`rgba(0,229,255,${vol*0.6})`; c.lineWidth=1.5; c.stroke();
+      }
+
+      rafRef.current = requestAnimationFrame(draw);
+    }
+
+    audio.addEventListener('play',  setup);
+    audio.addEventListener('pause', () => { if(rafRef.current) cancelAnimationFrame(rafRef.current); });
+    audio.addEventListener('ended', () => { if(rafRef.current) cancelAnimationFrame(rafRef.current); });
+
+    return () => { if(rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [audioRef]);
+
+  return (
+    <div className="relative" style={{width:size,height:size}}>
+      <Avatar src={src} username={username} size={size}/>
+      <canvas ref={canvasRef} width={size} height={size}
+              className="lipsync-canvas absolute inset-0 opacity-0 peer-[.playing]:opacity-100"
+              style={{mixBlendMode:'screen'}}/>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Audio Player with speed, duration, lipsync
+// ══════════════════════════════════════════════════════════════════════════════
+const SPEEDS = [1, 1.5, 2, 3];
+
+function AudioPlayer({ src, senderAvatar, senderName, storedDuration }) {
+  const audioRef   = useRef(null);
+  const [playing,  setPlaying]  = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(storedDuration||0);
+  const [speed,    setSpeed]    = useState(1);
+  const [showLip,  setShowLip]  = useState(false);
+
+  function toggle() {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) { a.pause(); setPlaying(false); setShowLip(false); }
+    else         { a.play(); setPlaying(true); setShowLip(true); }
+  }
+  function onTimeUpdate() {
+    const a = audioRef.current;
+    if (!a?.duration) return;
+    setProgress((a.currentTime/a.duration)*100);
+  }
+  function onMeta()  { setDuration(audioRef.current?.duration||storedDuration||0); }
+  function onEnded() { setPlaying(false); setProgress(0); setShowLip(false); }
+  function seek(e)   {
+    const a=audioRef.current; if(!a?.duration) return;
+    const r=e.currentTarget.getBoundingClientRect();
+    a.currentTime = ((e.clientX-r.left)/r.width)*a.duration;
+  }
+  function changeSpeed(s) {
+    setSpeed(s);
+    if (audioRef.current) audioRef.current.playbackRate = s;
+  }
+
+  return (
+    <div className="flex flex-col gap-2 bg-white/[0.06] rounded-xl px-3 py-2.5 min-w-[220px]">
+      <audio ref={audioRef} src={src} onTimeUpdate={onTimeUpdate}
+             onLoadedMetadata={onMeta} onEnded={onEnded}/>
+      <div className="flex items-center gap-3">
+        {/* Lipsync avatar */}
+        <div className="relative flex-shrink-0" style={{width:40,height:40}}>
+          <Avatar src={senderAvatar} username={senderName||'?'} size={40}/>
+          {playing && (
+            <div className="absolute inset-0 rounded-xl" style={{
+              background:'radial-gradient(circle,rgba(0,229,255,0.25),transparent)',
+              animation:'pulse 0.6s ease-in-out infinite alternate'
+            }}/>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] text-gray-400 mb-1.5 font-medium">
+            🎙 {playing ? `Playing ${speed}×...` : `Voice`} · {fDur(duration)}
+          </div>
+          {/* Progress bar */}
+          <div className="h-1.5 bg-white/10 rounded-full cursor-pointer" onClick={seek}>
+            <div className="h-full bg-gradient-to-r from-ncyan to-nviolet rounded-full transition-all"
+                 style={{width:`${progress}%`}}/>
+          </div>
+        </div>
+        <button onClick={toggle}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-black text-sm flex-shrink-0 transition-all
+                  ${playing ? 'bg-nrose' : 'bg-gradient-to-br from-ncyan to-nviolet'}`}>
+          {playing ? '⏸' : '▶'}
+        </button>
+      </div>
+
+      {/* Speed controls */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] text-gray-600 font-orbitron mr-1">SPEED</span>
+        {SPEEDS.map(s => (
+          <button key={s} className={`speed-btn ${speed===s?'active':''}`}
+                  onClick={()=>changeSpeed(s)}>{s}×</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Lightbox
+// ══════════════════════════════════════════════════════════════════════════════
+function Lightbox({ src, type, onClose }) {
+  useEffect(() => {
+    const h = e => { if(e.key==='Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+  return (
+    <div className="lightbox" onClick={onClose}>
+      <div className="lightbox-content" onClick={e=>e.stopPropagation()}>
+        {type==='video'
+          ? <video src={src} controls autoPlay/>
+          : <img src={src} alt=""/>}
+        <button onClick={onClose}
+                className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 text-white flex items-center justify-center text-sm hover:bg-black/80">✕</button>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Context Menu
+// ══════════════════════════════════════════════════════════════════════════════
+function ContextMenu({ x, y, mine, onEdit, onDelete, onReply, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const h = e => { if(ref.current && !ref.current.contains(e.target)) onClose(); };
+    setTimeout(()=>document.addEventListener('pointerdown', h), 0);
+    return () => document.removeEventListener('pointerdown', h);
+  }, []);
+
+  const style = {
+    position:'fixed', left: Math.min(x, window.innerWidth-160), zIndex:200
+  };
+
+  return (
+    <div ref={ref} className="ctx-menu" style={style}>
+      <div className="ctx-item" onClick={()=>{onReply();onClose();}}>
+        <span>↩</span> Reply
+      </div>
+      {mine && (
+        <>
+          <div className="ctx-item" onClick={()=>{onEdit();onClose();}}>
+            <span>✏️</span> Edit
+          </div>
+          <div className="ctx-item danger" onClick={()=>{onDelete();onClose();}}>
+            <span>🗑</span> Delete
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MessageBubble
+// ══════════════════════════════════════════════════════════════════════════════
+const MessageBubble = memo(function MessageBubble({ msg, currentUser, onReply, onEdit, onDelete, onMediaClick }) {
+  const mine      = msg.sender === currentUser?.username;
+  const [editing, setEditing]   = useState(false);
+  const [editVal, setEditVal]   = useState(msg.content);
+  const [ctx, setCtx]           = useState(null);
+
+  if (msg.deleted) {
+    return (
+      <div className={`flex gap-2 ${mine?'flex-row-reverse':''}`}>
+        <Avatar src={msg.senderAvatar} username={msg.sender} size={30}/>
+        <div className="italic text-gray-600 text-xs self-center px-2 py-1 rounded-lg border border-white/5">
+          🗑 Message deleted
+        </div>
+      </div>
+    );
+  }
+
+  function handleContextMenu(e) {
+    e.preventDefault();
+    setCtx({ x: e.clientX, y: e.clientY });
+  }
+
+  function commitEdit() {
+    if (editVal.trim() && editVal.trim() !== msg.content) onEdit(msg._id, editVal.trim());
+    setEditing(false);
+  }
+
+  // Reply preview
+  const ReplySnip = msg.replyTo?.sender ? (
+    <div className={`mb-2 pl-2.5 border-l-2 ${mine?'border-ncyan/50':'border-nviolet/50'} text-xs text-gray-500`}>
+      <span className="text-gray-300 font-semibold">{msg.replyTo.sender}</span>
+      <p className="truncate opacity-70 mt-0.5">{msg.replyTo.type==='text'?msg.replyTo.content:`📎 ${msg.replyTo.type}`}</p>
+    </div>
+  ) : null;
+
+  // Read receipts
+  const readers = (msg.readBy||[]).filter(u=>u!==currentUser?.username);
+
+  return (
+    <div className={`flex gap-2.5 group msg-in ${mine?'flex-row-reverse':''}`}
+         onContextMenu={handleContextMenu}>
+      <Avatar src={msg.senderAvatar} username={msg.sender} size={34}/>
+
+      <div className={`max-w-[68%] flex flex-col ${mine?'items-end':''}`}>
+        {!mine && <span className="text-[10.5px] text-nviolet/60 font-orbitron tracking-wider mb-1 ml-0.5">{msg.sender}</span>}
+
+        <div className={`rounded-2xl px-3.5 py-2.5 cursor-context-menu relative
+          ${mine
+            ? 'bg-ncyan/[0.10] border border-ncyan/20 rounded-tr-sm shadow-[0_0_16px_rgba(0,229,255,.08)]'
+            : 'bg-nviolet/[0.10] border border-nviolet/20 rounded-tl-sm shadow-[0_0_16px_rgba(155,93,229,.08)]'}`}>
+          {ReplySnip}
+
+          {/* TEXT */}
+          {msg.type==='text' && !editing && (
+            <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-gray-100">
+              {renderText(msg.content)}
+            </p>
+          )}
+
+          {/* EDIT INPUT */}
+          {editing && (
+            <div className="flex gap-2 items-end">
+              <textarea
+                className="edit-input flex-1 resize-none"
+                value={editVal}
+                onChange={e=>setEditVal(e.target.value)}
+                rows={2}
+                autoFocus
+                onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();commitEdit();}if(e.key==='Escape')setEditing(false);}}
+              />
+              <div className="flex flex-col gap-1">
+                <button onClick={commitEdit} className="px-2 py-1 rounded-lg bg-ncyan/20 text-ncyan text-xs border border-ncyan/30 hover:bg-ncyan/30">✓</button>
+                <button onClick={()=>setEditing(false)} className="px-2 py-1 rounded-lg bg-white/5 text-gray-400 text-xs border border-white/10 hover:bg-white/10">✕</button>
+              </div>
+            </div>
+          )}
+
+          {/* IMAGE */}
+          {msg.type==='image' && (
+            <img src={msg.content} alt="" loading="lazy" onClick={()=>onMediaClick(msg.content,'image')}
+                 className="rounded-xl max-w-[260px] max-h-[220px] object-cover cursor-zoom-in"/>
+          )}
+
+          {/* VIDEO */}
+          {msg.type==='video' && (
+            <div className="relative cursor-pointer" onClick={()=>onMediaClick(msg.content,'video')}>
+              <video src={msg.content} className="rounded-xl max-w-[260px] max-h-[200px] w-full"
+                     muted preload="metadata"/>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-full bg-black/60 flex items-center justify-center text-xl">▶</div>
+              </div>
+            </div>
+          )}
+
+          {/* AUDIO / VOICE-PTT */}
+          {(msg.type==='audio'||msg.type==='voice-ptt') && (
+            <AudioPlayer
+              src={msg.content}
+              senderAvatar={msg.senderAvatar}
+              senderName={msg.sender}
+              storedDuration={msg.audioDuration}
+            />
+          )}
+
+          {/* Edited badge */}
+          {msg.edited && !editing && (
+            <span className="text-[9px] text-gray-600 italic mt-1 block">edited</span>
+          )}
+        </div>
+
+        {/* Meta: time + read */}
+        <div className={`flex items-center gap-1.5 mt-1 px-0.5 ${mine?'flex-row-reverse':''}`}>
+          <span className="text-[10px] text-gray-600">{fTime(msg.timestamp)}</span>
+          {mine && readers.length>0 && <span className="text-ncyan text-[10px]" title={`Seen by ${readers.join(', ')}`}>👁</span>}
+          {mine && readers.length===0 && <span className="text-gray-700 text-[10px]">✓✓</span>}
+        </div>
+      </div>
+
+      {/* Context menu */}
+      {ctx && (
+        <ContextMenu
+          x={ctx.x} y={ctx.y}
+          mine={mine}
+          onReply={()=>onReply(msg)}
+          onEdit={()=>{ setEditVal(msg.content); setEditing(true); }}
+          onDelete={()=>onDelete(msg._id)}
+          onClose={()=>setCtx(null)}
+        />
+      )}
+    </div>
+  );
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Voice PTT Button
+// ══════════════════════════════════════════════════════════════════════════════
+function VoicePTT({ onVoiceSend }) {
+  const [state, setState]   = useState('idle');
+  const [secs, setSecs]     = useState(0);
+  const mrRef   = useRef(null);
+  const chunks  = useRef([]);
+  const streamR = useRef(null);
+  const timerR  = useRef(null);
+
+  async function start() {
+    if (state!=='idle') return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      streamR.current = stream;
+      chunks.current  = [];
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+      const mr   = new MediaRecorder(stream, {mimeType:mime});
+      mr.ondataavailable = e => { if(e.data.size>0) chunks.current.push(e.data); };
+      mr.onstop = () => {
+        const blob   = new Blob(chunks.current, {type:mime});
+        const dur    = secs;
+        const reader = new FileReader();
+        reader.onload = ev => onVoiceSend({audioData:ev.target.result, mimeType:mime, duration:dur});
+        reader.readAsDataURL(blob);
+        stream.getTracks().forEach(t=>t.stop());
+        setSecs(0); setState('idle');
+      };
+      mr.start(200);
+      mrRef.current = mr;
+      setState('recording');
+      setSecs(0);
+      timerR.current = setInterval(()=>setSecs(s=>s+1),1000);
+    } catch { alert('Mic permission denied.'); setState('idle'); }
+  }
+
+  function stop() {
+    if (state!=='recording') return;
+    clearInterval(timerR.current);
+    setState('processing');
+    mrRef.current?.stop();
+  }
+
+  function cancel() {
+    clearInterval(timerR.current);
+    streamR.current?.getTracks().forEach(t=>t.stop());
+    if (mrRef.current?.state!=='inactive') {
+      mrRef.current.ondataavailable=null;
+      mrRef.current.onstop=null;
+      mrRef.current.stop();
+    }
+    chunks.current=[];
+    setSecs(0); setState('idle');
+  }
+
+  if (state==='recording') return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[11px] text-nrose font-orbitron">{fDur(secs)}</span>
+      <button onPointerUp={stop}
+              className="ptt-rec w-9 h-9 rounded-full bg-nrose flex items-center justify-center text-white text-base"
+              title="Release to send">🎙</button>
+      <button onClick={cancel} className="w-6 h-6 rounded-full bg-white/5 text-gray-500 text-xs hover:bg-white/10">✕</button>
+    </div>
+  );
+
+  return (
+    <button onPointerDown={start}
+            className="w-9 h-9 rounded-xl bg-white/5 hover:bg-nviolet/20 border border-white/10 hover:border-nviolet/30 text-gray-400 hover:text-nviolet flex items-center justify-center text-base transition-all"
+            title="Hold to record voice">🎙</button>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Reply Preview Bar
+// ══════════════════════════════════════════════════════════════════════════════
+function ReplyBar({ replyTo, onCancel }) {
+  if (!replyTo) return null;
+  return (
+    <div className="mx-4 mb-2 px-3 py-2.5 rounded-xl bg-ncyan/[0.07] border border-ncyan/20 flex items-start justify-between gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] text-ncyan font-semibold mb-0.5">↩ Replying to {replyTo.sender}</div>
+        <div className="text-xs text-gray-400 truncate">{replyTo.type==='text'?replyTo.content:`📎 ${replyTo.type}`}</div>
+      </div>
+      <button onClick={onCancel} className="text-gray-600 hover:text-gray-300 text-sm">✕</button>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Scroll-to-bottom button with new message preview
+// ══════════════════════════════════════════════════════════════════════════════
+function ScrollToBottom({ newMsg, onClick }) {
+  if (!newMsg) return null;
+  return (
+    <div className="absolute bottom-[130px] left-1/2 -translate-x-1/2 z-30 cursor-pointer" onClick={onClick}>
+      <div className="bob flex flex-col items-center gap-1">
+        {/* Preview */}
+        <div className="bg-white/[0.08] backdrop-blur-xl border border-white/[0.12] rounded-2xl px-4 py-2.5 max-w-[280px] shadow-xl">
+          <div className="text-[10px] text-gray-500 font-orbitron tracking-wider mb-1">{newMsg.sender}</div>
+          <div className="text-sm text-gray-200 truncate">
+            {newMsg.type==='text' ? String(newMsg.content).slice(0,60) : `📎 ${newMsg.type}`}
+          </div>
+        </div>
+        {/* Arrow */}
+        <div className="w-8 h-8 rounded-full bg-ncyan/20 border border-ncyan/30 flex items-center justify-center text-ncyan text-base shadow-lg">↓</div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Typing Indicator
+// ══════════════════════════════════════════════════════════════════════════════
+function TypingBar({ typingUsers }) {
+  const names = Object.entries(typingUsers).filter(([,v])=>v).map(([k])=>k);
+  if (!names.length) return null;
+  const label = names.length===1 ? `${names[0]} is typing` : `${names.slice(0,-1).join(', ')} and ${names.slice(-1)} are typing`;
+  return (
+    <div className="flex items-center gap-2 px-5 py-1 msg-in">
+      <div className="flex gap-1 bg-nviolet/10 border border-nviolet/20 rounded-xl px-3 py-2">
+        <span className="tdot w-1.5 h-1.5 rounded-full bg-nviolet"/>
+        <span className="tdot w-1.5 h-1.5 rounded-full bg-nviolet"/>
+        <span className="tdot w-1.5 h-1.5 rounded-full bg-nviolet"/>
+      </div>
+      <span className="text-[11px] text-gray-500 italic">{label}</span>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Sidebar
+// ══════════════════════════════════════════════════════════════════════════════
+function Sidebar({ users, currentUser, onClose }) {
+  return (
+    <div className="w-64 flex-shrink-0 flex flex-col bg-white/[0.025] border-r border-white/[0.07] relative z-10">
+      <div className="px-5 py-4 border-b border-white/[0.07] flex items-center justify-between">
+        <div>
+          <div className="font-orbitron font-bold text-[14px] tracking-widest bg-gradient-to-r from-ncyan to-nviolet bg-clip-text text-transparent">NEXUS</div>
+          <div className="text-[10px] text-gray-600 font-orbitron tracking-widest mt-0.5"># GENERAL</div>
+        </div>
+        <button onClick={onClose} className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-gray-500 text-sm">×</button>
+      </div>
+
+      {currentUser && (
+        <div className="mx-4 mt-4 p-3 rounded-xl bg-ncyan/[0.06] border border-ncyan/20">
+          <div className="flex items-center gap-3">
+            <Avatar src={currentUser.avatar} username={currentUser.username} size={36} ring/>
+            <div>
+              <div className="text-sm font-semibold text-gray-100">{currentUser.username}</div>
+              <div className="text-[10px] text-ncyan font-orbitron tracking-wide">YOU</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="px-4 mt-4 mb-2 text-[10px] font-orbitron tracking-widest text-gray-600">ONLINE — {users.length+1}</div>
+      <div className="flex-1 overflow-y-auto px-4 pb-4 flex flex-col gap-2">
+        {users.map(u => (
+          <div key={u.socketId||u.username} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors">
+            <div className="relative">
+              <Avatar src={u.avatar} username={u.username} size={34}/>
+              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-ngreen pulse border-2 border-ndark"/>
+            </div>
+            <div>
+              <div className="text-sm text-gray-200">{u.username}</div>
+              <div className="text-[10px] text-ngreen">Online</div>
+            </div>
+          </div>
+        ))}
+        {users.length===0 && <div className="text-center text-gray-700 text-xs py-8 font-orbitron tracking-wider">No one else online</div>}
+      </div>
+
+      <div className="p-4 border-t border-white/[0.07]">
+        <a href="/" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-nrose/10 border border-nrose/20 hover:bg-nrose/20 transition-colors cursor-pointer">
+          <span>⏏</span>
+          <span className="text-sm text-nrose/80 font-orbitron text-[11px] tracking-wider">LEAVE CHANNEL</span>
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ══════════════════════════════════════════════════════════════════════════════
+function App() {
+  const [currentUser,  setCurrentUser]  = useState(null);
+  const [messages,     setMessages]     = useState([]);
+  const [onlineUsers,  setOnlineUsers]  = useState([]);
+  const [typingUsers,  setTypingUsers]  = useState({});
+  const [replyTo,      setReplyTo]      = useState(null);
+  const [inputText,    setInputText]    = useState('');
+  const [hasMore,      setHasMore]      = useState(false);
+  const [loadingMore,  setLoadingMore]  = useState(false);
+  const [uploadProg,   setUploadProg]   = useState(null);
+  const [sidebarOpen,  setSidebarOpen]  = useState(window.innerWidth>768);
+  const [lightbox,     setLightbox]     = useState(null);
+  const [connected,    setConnected]    = useState(false);
+  const [atBottom,     setAtBottom]     = useState(true);
+  const [newMsgBanner, setNewMsgBanner] = useState(null);
+
+  const endRef      = useRef(null);
+  const topRef      = useRef(null);
+  const scrollRef   = useRef(null);
+  const inputRef    = useRef(null);
+  const fileRef     = useRef(null);
+  const typingTimer = useRef(null);
+  const isTypingR   = useRef(false);
+  const loadingR    = useRef(false);
+  const pageR       = useRef(2);
+  const curUserR    = useRef(null);
+
+  useEffect(() => { curUserR.current = currentUser; }, [currentUser]);
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const saved = sessionStorage.getItem('nexus-v3-user');
+    if (!saved) { window.location.href = '/'; return; }
+    const user = JSON.parse(saved);
+    setCurrentUser(user);
+
+    const history = JSON.parse(sessionStorage.getItem('nexus-v3-history')||'[]');
+    setMessages(history);
+    setHasMore(history.length>=50);
+
+    if (typeof Notification!=='undefined' && Notification.permission==='default') {
+      Notification.requestPermission();
+    }
+
+    socket.emit('join', { username: user.username, avatar: user.avatar, sessionId: user.sessionId });
+
+    return () => socket.off();
+  }, []);
+
+  // ── Socket events ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    socket.on('connect',    () => setConnected(true));
+    socket.on('disconnect', () => setConnected(false));
+    socket.on('auth-error', () => { sessionStorage.clear(); window.location.href='/'; });
+
+    socket.on('online-users', users => {
+      setOnlineUsers(users.filter(u => u.username !== curUserR.current?.username));
+    });
+    socket.on('user-joined', ({ username, onlineUsers: ou }) => {
+      addSysMsg(`${username} joined`);
+      setOnlineUsers((ou||[]).filter(u => u.username !== curUserR.current?.username));
+    });
+    socket.on('user-left', ({ username, onlineUsers: ou }) => {
+      addSysMsg(`${username} left`);
+      setOnlineUsers((ou||[]).filter(u => u.username !== curUserR.current?.username));
+    });
+
+    socket.on('chat-message', msg => {
+      setMessages(prev => {
+        if (prev.some(m=>String(m._id)===String(msg._id))) return prev.map(m=>String(m._id)===String(msg._id)?msg:m);
+        return [...prev, msg];
+      });
+
+      // Show scroll-to-bottom banner if not at bottom and message from others
+      if (!atBottom && msg.sender !== curUserR.current?.username) {
+        setNewMsgBanner(msg);
+      }
+
+      if (msg.sender !== curUserR.current?.username) {
+        socket.emit('message-seen', { messageId: msg._id });
+        if (document.hidden && typeof Notification!=='undefined' && Notification.permission==='granted') {
+          new Notification(`⚡ ${msg.sender}`, {
+            body: msg.type==='text' ? String(msg.content).slice(0,80) : `Sent a ${msg.type}`,
+          });
+        }
+      }
+    });
+
+    socket.on('message-edited', ({ messageId, newContent, editedAt }) => {
+      setMessages(prev => prev.map(m =>
+        String(m._id)===String(messageId) ? {...m, content:newContent, edited:true, editedAt} : m
+      ));
+    });
+
+    socket.on('message-deleted', ({ messageId }) => {
+      setMessages(prev => prev.map(m =>
+        String(m._id)===String(messageId) ? {...m, deleted:true} : m
+      ));
+    });
+
+    socket.on('user-typing', ({ username, isTyping }) => {
+      if (username === curUserR.current?.username) return;
+      setTypingUsers(prev => ({...prev, [username]: isTyping}));
+    });
+
+    socket.on('message-seen', ({ messageId, readBy }) => {
+      setMessages(prev => prev.map(m =>
+        String(m._id)===String(messageId) ? {...m, readBy} : m
+      ));
+    });
+
+    socket.on('voice-ptt', ({ audioData, mimeType, username, avatar, duration, timestamp }) => {
+      const synthetic = {
+        _id: genId()+'-ptt', sender:username, senderAvatar:avatar,
+        content:audioData, type:'voice-ptt', audioDuration:duration||0,
+        readBy:[], replyTo:{}, timestamp: timestamp||new Date(), deleted:false, edited:false,
+      };
+      setMessages(prev=>[...prev, synthetic]);
+    });
+
+    socket.on('reconnect', () => {
+      const u = curUserR.current;
+      if (u) socket.emit('join', { username:u.username, avatar:u.avatar, sessionId:u.sessionId });
+    });
+
+    return () => socket.off();
+  }, [atBottom]);
+
+  // ── Auto-scroll ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (atBottom) {
+      endRef.current?.scrollIntoView({ behavior:'smooth' });
+      setNewMsgBanner(null);
+    }
+  }, [messages.length]);
+
+  // ── Scroll watcher ────────────────────────────────────────────────────────
+  function onScroll(e) {
+    const el    = e.currentTarget;
+    const isBot = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setAtBottom(isBot);
+    if (isBot) setNewMsgBanner(null);
+  }
+
+  // ── Infinite scroll ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!topRef.current || !hasMore) return;
+    const obs = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && !loadingR.current) loadOlder();
+    }, { threshold:0.1 });
+    obs.observe(topRef.current);
+    return () => obs.disconnect();
+  }, [hasMore]);
+
+  async function loadOlder() {
+    if (loadingR.current) return;
+    loadingR.current = true; setLoadingMore(true);
+    try {
+      const res  = await fetch(`/api/messages?room=general&page=${pageR.current}&limit=30`);
+      const data = await res.json();
+      if (data.messages?.length>0) { setMessages(prev=>[...data.messages,...prev]); pageR.current++; }
+      setHasMore(data.hasMore||false);
+    } catch (_) {}
+    loadingR.current=false; setLoadingMore(false);
+  }
+
+  // ── Sys message ───────────────────────────────────────────────────────────
+  function addSysMsg(text) {
+    setMessages(prev=>[...prev, {_id:genId(), type:'_sys', content:text, timestamp:new Date()}]);
+  }
+
+  // ── Typing ────────────────────────────────────────────────────────────────
+  function handleInput(e) {
+    setInputText(e.target.value);
+    if (!isTypingR.current) { isTypingR.current=true; socket.emit('typing',true); }
+    clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(()=>{ isTypingR.current=false; socket.emit('typing',false); }, 2000);
+  }
+
+  // ── Send text ─────────────────────────────────────────────────────────────
+  function sendMessage() {
+    const text = inputText.trim();
+    if (!text) return;
+    socket.emit('chat-message', {
+      content: text, type:'text',
+      replyTo: replyTo ? { messageId:replyTo._id, sender:replyTo.sender, content:replyTo.content, type:replyTo.type } : null,
+    });
+    setInputText(''); setReplyTo(null);
+    clearTimeout(typingTimer.current); isTypingR.current=false; socket.emit('typing',false);
+    inputRef.current?.focus();
+  }
+
+  // ── Upload media ──────────────────────────────────────────────────────────
+  async function uploadFile(file) {
+    if (!file) return;
+    setUploadProg(5);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      setUploadProg(40);
+      const res  = await fetch('/api/upload', {method:'POST', body:fd});
+      setUploadProg(90);
+      const data = await res.json();
+      setUploadProg(null);
+      if (data.url) {
+        socket.emit('chat-message', {
+          content:data.url, type:data.type,
+          replyTo: replyTo ? {messageId:replyTo._id,sender:replyTo.sender,content:replyTo.content,type:replyTo.type} : null,
+        });
+        setReplyTo(null);
+      }
+    } catch { setUploadProg(null); alert('Upload failed.'); }
+  }
+
+  // ── Voice PTT ─────────────────────────────────────────────────────────────
+  function handleVoiceSend({ audioData, mimeType, duration }) {
+    socket.emit('voice-ptt', { audioData, mimeType, duration });
+    const synthetic = {
+      _id:genId()+'-local', sender:currentUser.username, senderAvatar:currentUser.avatar,
+      content:audioData, type:'voice-ptt', audioDuration:duration||0,
+      readBy:[currentUser.username], replyTo:{}, timestamp:new Date(), deleted:false, edited:false,
+    };
+    setMessages(prev=>[...prev, synthetic]);
+  }
+
+  // ── Edit / Delete ─────────────────────────────────────────────────────────
+  function handleEdit(messageId, newContent) {
+    socket.emit('edit-message', { messageId, newContent });
+  }
+  function handleDelete(messageId) {
+    if (!window.confirm('Delete this message?')) return;
+    socket.emit('delete-message', { messageId });
+  }
+
+  // ── Date-grouped messages ─────────────────────────────────────────────────
+  const grouped = useMemo(() => {
+    const result=[]; let lastDate=null;
+    messages.forEach(msg => {
+      const d = fDate(msg.timestamp);
+      if (d!==lastDate) { result.push({type:'_date', text:d, id:`date-${d}-${msg._id}`}); lastDate=d; }
+      result.push(msg);
+    });
+    return result;
+  }, [messages]);
+
+  if (!currentUser) return (
+    <div className="h-screen flex items-center justify-center bg-ndark">
+      <div className="text-ncyan font-orbitron text-sm tracking-widest animate-pulse">LOADING NEXUS...</div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen bg-ndark overflow-hidden relative">
+      {/* BG blobs */}
+      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+        <div className="blob opacity-25" style={{width:'500px',height:'500px',background:'radial-gradient(circle,#7b2ff7,#5390d9)',top:'-180px',left:'-100px',animationDuration:'24s'}}/>
+        <div className="blob opacity-20" style={{width:'380px',height:'380px',background:'radial-gradient(circle,#00e5ff,#004e92)',bottom:'-100px',right:'-80px',animationDuration:'30s',animationDelay:'-11s'}}/>
+      </div>
+      <div className="grain"/>
+
+      {/* Sidebar */}
+      {sidebarOpen && <Sidebar users={onlineUsers} currentUser={currentUser} onClose={()=>setSidebarOpen(false)}/>}
+
+      {/* Chat column */}
+      <div className="flex-1 flex flex-col relative z-10 min-w-0">
+
+        {/* ── HEADER ── */}
+        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/[0.07] bg-black/30 backdrop-blur-xl flex-shrink-0">
+          {!sidebarOpen && (
+            <button onClick={()=>setSidebarOpen(true)} className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 flex items-center justify-center">☰</button>
+          )}
+          <div className="font-orbitron font-bold text-[14px] tracking-widest bg-gradient-to-r from-ncyan to-nviolet bg-clip-text text-transparent">NEXUS</div>
+          <div className="text-[10px] font-orbitron text-gray-600 tracking-widest"># GENERAL</div>
+
+          <div className="ml-auto flex items-center gap-3">
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+              <div className={`w-2 h-2 rounded-full ${connected?'bg-ngreen pulse':'bg-nrose'}`}/>
+              <span>{onlineUsers.length+1} online</span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10">
+              <Avatar src={currentUser.avatar} username={currentUser.username} size={22}/>
+              <span className="text-[11px] font-orbitron text-ncyan">{currentUser.username}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ── MESSAGES ── */}
+        <div ref={scrollRef} onScroll={onScroll}
+             className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 relative">
+
+          <div ref={topRef}>
+            {loadingMore && <div className="text-center py-3 text-[10px] font-orbitron text-gray-700 animate-pulse tracking-widest">LOADING OLDER...</div>}
+          </div>
+
+          {grouped.map(item => {
+            if (item.type==='_date') return (
+              <div key={item.id} className="flex items-center gap-3 my-2">
+                <div className="flex-1 h-px bg-white/[0.05]"/>
+                <span className="text-[10px] font-orbitron text-gray-600 tracking-widest uppercase">{item.text}</span>
+                <div className="flex-1 h-px bg-white/[0.05]"/>
+              </div>
+            );
+            if (item.type==='_sys') return (
+              <div key={item._id} className="flex justify-center">
+                <span className="text-[10px] text-gray-600 bg-white/5 px-3 py-1 rounded-full font-orbitron tracking-widest uppercase">{item.content}</span>
+              </div>
+            );
+            return (
+              <MessageBubble
+                key={item._id}
+                msg={item}
+                currentUser={currentUser}
+                onReply={msg=>{ setReplyTo(msg); inputRef.current?.focus(); }}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+                onMediaClick={(src,type)=>setLightbox({src,type})}
+              />
+            );
+          })}
+          <div ref={endRef}/>
+        </div>
+
+        {/* Scroll-to-bottom banner */}
+        {newMsgBanner && !atBottom && (
+          <ScrollToBottom
+            newMsg={newMsgBanner}
+            onClick={()=>{ endRef.current?.scrollIntoView({behavior:'smooth'}); setNewMsgBanner(null); setAtBottom(true); }}
+          />
+        )}
+
+        {/* Typing bar */}
+        <TypingBar typingUsers={typingUsers}/>
+
+        {/* Reply bar */}
+        <ReplyBar replyTo={replyTo} onCancel={()=>setReplyTo(null)}/>
+
+        {/* Upload progress */}
+        {uploadProg!==null && (
+          <div className="mx-4 mb-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+            <div className="flex justify-between text-xs text-gray-400 mb-1"><span>Uploading...</span><span>{Math.round(uploadProg)}%</span></div>
+            <div className="h-1 bg-white/10 rounded-full">
+              <div className="h-full bg-gradient-to-r from-ncyan to-nviolet rounded-full transition-all" style={{width:`${uploadProg}%`}}/>
+            </div>
+          </div>
+        )}
+
+        {/* ── INPUT ── */}
+        <div className="px-4 pb-4 pt-2 border-t border-white/[0.07] bg-black/20 backdrop-blur-xl flex-shrink-0">
+          <div className="flex items-end gap-2 bg-white/[0.05] border border-white/[0.09] rounded-2xl px-4 py-2.5 focus-within:border-ncyan/30 focus-within:shadow-[0_0_0_3px_rgba(0,229,255,.06)] transition-all">
+
+            {/* Attach */}
+            <button onClick={()=>fileRef.current?.click()}
+                    className="w-9 h-9 rounded-xl bg-white/5 hover:bg-nviolet/20 border border-white/10 hover:border-nviolet/30 text-gray-400 hover:text-nviolet flex items-center justify-center text-base transition-all flex-shrink-0 self-end"
+                    title="Attach image / video / audio">📎</button>
+            <input type="file" ref={fileRef}
+                   accept="image/*,video/mp4,video/webm,audio/mpeg,audio/wav,audio/webm"
+                   className="hidden"
+                   onChange={e=>{ uploadFile(e.target.files[0]); e.target.value=''; }}/>
+
+            {/* Textarea */}
+            <textarea
+              ref={inputRef}
+              value={inputText}
+              onChange={handleInput}
+              onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} }}
+              rows={1}
+              maxLength={4000}
+              placeholder="Type a message… (right-click bubble to edit/delete/reply)"
+              className="flex-1 bg-transparent border-none outline-none resize-none text-gray-100 text-sm leading-relaxed placeholder:text-gray-600 min-h-[36px] max-h-[120px] self-center py-1"
+              onInput={e=>{ e.target.style.height='auto'; e.target.style.height=Math.min(e.target.scrollHeight,120)+'px'; }}
+            />
+
+            {/* Voice PTT */}
+            <div className="self-end flex-shrink-0"><VoicePTT onVoiceSend={handleVoiceSend}/></div>
+
+            {/* Send */}
+            <button onClick={sendMessage} disabled={!inputText.trim()}
+                    className="self-end w-9 h-9 rounded-xl relative overflow-hidden bg-gradient-to-br from-ncyan to-nviolet text-black font-bold flex items-center justify-center text-base flex-shrink-0 disabled:opacity-30 disabled:cursor-not-allowed hover:scale-105 active:scale-95 transition-transform shadow-[0_0_18px_rgba(0,229,255,.2)]"
+                    title="Send">➤</button>
+          </div>
+          <div className="flex justify-between mt-1 px-1">
+            <span className="text-[10px] text-gray-700">Enter sends · Shift+Enter newline · Right-click to edit/delete</span>
+            <span className="text-[10px] text-gray-700">{inputText.length}/4000</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Lightbox */}
+      {lightbox && <Lightbox src={lightbox.src} type={lightbox.type} onClose={()=>setLightbox(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

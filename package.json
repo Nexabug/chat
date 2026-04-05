@@ -1,0 +1,23 @@
+{
+  "name": "nexus-chat-v3",
+  "version": "3.0.0",
+  "description": "Nexus Chat v3 — Auth + Edit/Delete + Video + Lipsync + Scroll Preview by Prince Kumar Yadav",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev":   "nodemon server.js"
+  },
+  "dependencies": {
+    "express":  "^4.18.2",
+    "socket.io": "^4.7.2",
+    "mongoose": "^8.0.3",
+    "multer":   "^1.4.5-lts.1",
+    "dotenv":   "^16.3.1",
+    "cors":     "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "author": "Prince Kumar Yadav",
+  "license": "MIT"
+}
